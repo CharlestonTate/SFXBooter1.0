@@ -32,15 +32,10 @@ fn write_icon(png_path: &str, ico_path: &Path) -> Result<(), String> {
 
     let mut icon_dir = ico::IconDir::new(ico::ResourceType::Icon);
     for size in [16_u32, 32, 48, 64, 128, 256] {
-        let resized = image::imageops::resize(
-            &image,
-            size,
-            size,
-            image::imageops::FilterType::Lanczos3,
-        );
+        let resized =
+            image::imageops::resize(&image, size, size, image::imageops::FilterType::Lanczos3);
         let entry = ico::IconImage::from_rgba_data(size, size, resized.into_raw());
-        icon_dir
-            .add_entry(ico::IconDirEntry::encode(&entry).map_err(|err| err.to_string())?);
+        icon_dir.add_entry(ico::IconDirEntry::encode(&entry).map_err(|err| err.to_string())?);
     }
     let mut bytes = Vec::new();
     icon_dir
