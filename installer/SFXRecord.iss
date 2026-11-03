@@ -1,7 +1,7 @@
-; sfx record windows installer (inno setup 6)
+; sfx record windows installer (inno setup 6). ships wav/aiff/flac/mp3 clip support.
 
 #define MyAppName "SFX Record"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.1.1"
 #define MyAppPublisher "SFX Record"
 #define MyAppExeName "sfxrecord.exe"
 

@@ -12,6 +12,7 @@ use flacenc::error::Verify;
 use hound::{SampleFormat as WavFormat, WavReader, WavSpec, WavWriter};
 use rodio::buffer::SamplesBuffer;
 use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player, Source};
+use rusty_mp3::{Error as Mp3Error, Mp3Decoder, Mp3Encoder, Mp3EncoderConfig};
 
 pub struct Recorded {
     pub sample_rate: u32,
@@ -84,16 +85,23 @@ pub enum AudioFormat {
     Wav,
     Aiff,
     Flac,
+    Mp3,
 }
 
 impl AudioFormat {
-    pub const ALL: [AudioFormat; 3] = [AudioFormat::Wav, AudioFormat::Aiff, AudioFormat::Flac];
+    pub const ALL: [AudioFormat; 4] = [
+        AudioFormat::Wav,
+        AudioFormat::Aiff,
+        AudioFormat::Flac,
+        AudioFormat::Mp3,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             AudioFormat::Wav => "WAV",
             AudioFormat::Aiff => "AIFF",
             AudioFormat::Flac => "FLAC",
+            AudioFormat::Mp3 => "MP3",
         }
     }
 
@@ -102,6 +110,7 @@ impl AudioFormat {
             AudioFormat::Wav => "wav",
             AudioFormat::Aiff => "aiff",
             AudioFormat::Flac => "flac",
+            AudioFormat::Mp3 => "mp3",
         }
     }
 
@@ -114,6 +123,7 @@ impl AudioFormat {
             "wav" => Some(AudioFormat::Wav),
             "aiff" | "aif" => Some(AudioFormat::Aiff),
             "flac" => Some(AudioFormat::Flac),
+            "mp3" => Some(AudioFormat::Mp3),
             _ => None,
         }
     }
@@ -343,6 +353,7 @@ pub fn write_clip(
         AudioFormat::Wav => write_i16_wav(path, sample_rate, channels, samples),
         AudioFormat::Aiff => write_aiff(path, sample_rate, channels, samples),
         AudioFormat::Flac => write_flac(path, sample_rate, channels, samples),
+        AudioFormat::Mp3 => write_mp3(path, sample_rate, channels, samples),
     }
 }
 
@@ -396,7 +407,8 @@ pub fn read_clip(path: &Path) -> Result<LoadedWav, String> {
         Some(AudioFormat::Wav) => read_wav(path),
         Some(AudioFormat::Aiff) => read_aiff(path),
         Some(AudioFormat::Flac) => read_flac(path),
-        None => Err("That file is not a WAV, AIFF, or FLAC clip.".into()),
+        Some(AudioFormat::Mp3) => read_mp3(path),
+        None => Err("That file is not a WAV, AIFF, FLAC, or MP3 clip.".into()),
     }
 }
 
@@ -405,6 +417,7 @@ pub fn clip_duration(path: &Path) -> Result<f32, String> {
         Some(AudioFormat::Wav) => wav_duration(path),
         Some(AudioFormat::Aiff) => aiff_duration(path),
         Some(AudioFormat::Flac) => flac_duration_file(path),
+        Some(AudioFormat::Mp3) => mp3_duration(path),
         None => Err("Unknown clip format.".into()),
     }
 }
@@ -786,6 +799,86 @@ fn read_flac(path: &Path) -> Result<LoadedWav, String> {
     })
 }
 
+fn read_mp3(path: &Path) -> Result<LoadedWav, String> {
+    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
+    let len = bytes.len() as u64;
+    let decoder = rodio::Decoder::builder()
+        .with_data(std::io::Cursor::new(bytes))
+        .with_byte_len(len)
+        .with_seekable(true)
+        .with_hint("mp3")
+        .build()
+        .map_err(|err| err.to_string())?;
+    let channels = decoder.channels().get();
+    let sample_rate = decoder.sample_rate().get();
+    let mut samples = decoder.map(f32_to_i16).collect::<Vec<_>>();
+    let width = channels as usize;
+    let extra = samples.len() % width.max(1);
+    if width > 0 && extra != 0 {
+        samples.truncate(samples.len() - extra);
+    }
+    if channels == 0 || sample_rate == 0 || samples.is_empty() {
+        return Err("MP3 file has no audio.".into());
+    }
+    Ok(LoadedWav {
+        sample_rate,
+        channels,
+        samples,
+    })
+}
+
+fn mp3_duration(path: &Path) -> Result<f32, String> {
+    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
+    let mut decoder = Mp3Decoder::new();
+    decoder.push(&bytes);
+    decoder.flush();
+    let mut sample_rate = 0u32;
+    let mut frames = 0usize;
+    loop {
+        match decoder.next_frame() {
+            Ok(chunk) => {
+                if sample_rate == 0 {
+                    sample_rate = chunk.sample_rate;
+                }
+                let channels = chunk.channels.max(1) as usize;
+                frames += chunk.samples.len() / channels;
+            }
+            Err(Mp3Error::Eof) => break,
+            Err(Mp3Error::Again) => break,
+            Err(err) => return Err(err.to_string()),
+        }
+    }
+    if sample_rate == 0 {
+        return Ok(0.0);
+    }
+    Ok(frames as f32 / sample_rate as f32)
+}
+
+fn write_mp3(path: &Path, sample_rate: u32, channels: u16, samples: &[i16]) -> Result<(), String> {
+    let config = Mp3EncoderConfig {
+        bitrate_kbps: 192,
+        vbr_quality: None,
+    };
+    let mut encoder = Mp3Encoder::new(config);
+    encoder
+        .push_pcm_s16(samples, channels, sample_rate)
+        .map_err(|err| err.to_string())?;
+    encoder.finish();
+    let mut mp3 = Vec::new();
+    loop {
+        match encoder.next_packet() {
+            Ok(packet) => mp3.extend_from_slice(&packet),
+            Err(Mp3Error::Eof) => break,
+            Err(Mp3Error::Again) => break,
+            Err(err) => return Err(err.to_string()),
+        }
+    }
+    if mp3.is_empty() {
+        return Err("MP3 encode produced no data.".into());
+    }
+    write_bytes(path, &mp3)
+}
+
 // streaminfo sits at a fixed spot when it is the first metadata block,
 // which is how every normal flac file is laid out.
 fn flac_duration_file(path: &Path) -> Result<f32, String> {
@@ -930,6 +1023,21 @@ mod tests {
         for (got, want) in loaded.samples.iter().zip(samples.iter()) {
             assert!((*got - *want).abs() <= 2);
         }
+    }
+
+    #[test]
+    fn mp3_roundtrip_opens_and_lists() {
+        let path = std::env::temp_dir().join(format!("sfxrecord-test-{}.mp3", std::process::id()));
+        let samples: Vec<i16> = (0..512).map(|index| (index * 50) as i16).collect();
+        write_clip(&path, 44_100, 1, &samples, AudioFormat::Mp3).unwrap();
+        let loaded = read_clip(&path).unwrap();
+        let duration = clip_duration(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(loaded.sample_rate, 44_100);
+        assert_eq!(loaded.channels, 1);
+        assert!(loaded.frames() > 0);
+        assert!(duration > 0.0);
+        assert!(!loaded.samples.is_empty());
     }
 
     #[test]

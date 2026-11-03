@@ -1144,7 +1144,7 @@ impl SfxApp {
                 }
             }
         });
-        ui.weak("WAV, AIFF, and FLAC in this folder appear below. Record saves here too.");
+        ui.weak("WAV, AIFF, FLAC, and MP3 in this folder appear below. Record saves here too.");
     }
 
     fn show_queue(&mut self, ui: &mut egui::Ui) {
@@ -1988,7 +1988,7 @@ fn format_recorded(time: SystemTime) -> String {
 fn sanitize_stem(raw: &str) -> String {
     let mut stem = raw.trim().to_string();
     let lower = stem.to_ascii_lowercase();
-    for extension in [".wav", ".aiff", ".aif", ".flac"] {
+    for extension in [".wav", ".aiff", ".aif", ".flac", ".mp3"] {
         if let Some(stripped) = lower.strip_suffix(extension) {
             stem.truncate(stripped.len());
             break;

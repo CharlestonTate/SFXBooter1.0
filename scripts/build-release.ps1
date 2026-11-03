@@ -38,4 +38,4 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host ""
 Write-Host "Done."
 Write-Host "  dist\sfxrecord.exe"
-Write-Host "  dist\SFXRecord-Setup-0.1.0.exe"
+Write-Host "  dist\SFXRecord-Setup-0.1.1.exe"
